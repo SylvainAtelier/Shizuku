@@ -28,7 +28,9 @@ apply from: 'api/manifest.gradle'
 def gitCommitId = 'git rev-parse --short HEAD'.execute([], project.rootDir).text.trim()
 def gitCommitCount = Integer.parseInt('git rev-list --count HEAD'.execute([], project.rootDir).text.trim())
 def baseVersionName = "${api_version_major}.6.0"
+// release.yml 用 -PversionName 注入 tag 算出的版本号；deploy-debug.ps1 用 -PversionCode
+// 注入「设备现装 + 1」。不传就走提交数，与上游一致。
 ext {
-    versionCode = gitCommitCount
-    versionName = "${baseVersionName}.r${gitCommitCount}.${gitCommitId}"
+    versionCode = providers.gradleProperty('versionCode').map { it.toInteger() }.getOrElse(gitCommitCount)
+    versionName = providers.gradleProperty('versionName').getOrElse("${baseVersionName}.r${gitCommitCount}.${gitCommitId}")
 }

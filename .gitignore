@@ -11,3 +11,11 @@
 /manager/signing.properties
 /out
 /signing.properties
+
+# 签名材料：绝不入库
+*.jks
+*.keystore
+*.jks.base64
+keystore.properties
+
+.local/

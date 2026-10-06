@@ -1,17 +1,43 @@
-def ksFile = rootProject.file('signing.properties')
-def props = new Properties()
-if (ksFile.canRead()) {
-    props.load(new FileInputStream(ksFile))
+// 发布签名材料的来源，优先级从上到下：
+//   1. .local/signing/keystore.properties（本地出包用，由 scripts/setup-signing.ps1 生成，已 gitignore）
+//      storeFile / storePassword / keyAlias / keyPassword；storeFile 为相对路径时相对该目录
+//   2. 根目录 signing.properties（上游 app.yml 写入的旧格式）
+//      KEYSTORE_FILE / KEYSTORE_PASSWORD / KEYSTORE_ALIAS / KEYSTORE_ALIAS_PASSWORD
+//   3. 四个环境变量（release.yml 从 Secret 还原并预检后写入 GITHUB_ENV）
+//      ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+//
+// 都没有时：release 不签名（产出无法安装的包，只能用来确认能编译），
+// debug 用本机 debug keystore。release 绝不退回 debug 签名——那是每台机器各自
+// 随机生成的 keystore，用户覆盖安装必然「签名冲突」，且事后难以追溯。
+def loadProps = { String name ->
+    def f = rootProject.file(name)
+    def p = new Properties()
+    if (f.canRead()) f.withInputStream { p.load(it) }
+    return p
+}
+def localSigningDir = rootProject.file('.local/signing')
+def keystoreProps = loadProps('.local/signing/keystore.properties')
+def legacyProps = loadProps('signing.properties')
 
-    if (props != null) {
-        android.signingConfigs.sign.storeFile file(props['KEYSTORE_FILE'])
-        android.signingConfigs.sign.storePassword props['KEYSTORE_PASSWORD']
-        android.signingConfigs.sign.keyAlias props['KEYSTORE_ALIAS']
-        android.signingConfigs.sign.keyPassword props['KEYSTORE_ALIAS_PASSWORD']
+def secret = { String key, String legacyKey, String envName ->
+    keystoreProps.getProperty(key) ?: legacyProps.getProperty(legacyKey) ?: System.getenv(envName)
+}
+
+def storePath = secret('storeFile', 'KEYSTORE_FILE', 'ANDROID_KEYSTORE_PATH')
+def sign = android.signingConfigs.sign
+
+if (storePath) {
+    def storeFile = new File(storePath)
+    if (!storeFile.absolute) {
+        storeFile = keystoreProps.getProperty('storeFile') ? new File(localSigningDir, storePath) : file(storePath)
     }
+    sign.storeFile = storeFile
+    sign.storePassword = secret('storePassword', 'KEYSTORE_PASSWORD', 'ANDROID_KEYSTORE_PASSWORD')
+    sign.keyAlias = secret('keyAlias', 'KEYSTORE_ALIAS', 'ANDROID_KEY_ALIAS')
+    sign.keyPassword = secret('keyPassword', 'KEYSTORE_ALIAS_PASSWORD', 'ANDROID_KEY_PASSWORD')
 } else {
-    android.signingConfigs.sign.storeFile = android.signingConfigs.debug.storeFile
-    android.signingConfigs.sign.storePassword = android.signingConfigs.debug.storePassword
-    android.signingConfigs.sign.keyAlias = android.signingConfigs.debug.keyAlias
-    android.signingConfigs.sign.keyPassword = android.signingConfigs.debug.keyPassword
+    // debug 与 release 共用同一个 applicationId（包名被 starter/server 硬编码，不能加后缀），
+    // 所以设备上装着 release 签名的包时，用 debug keystore 签的 debug 包会装不上。
+    android.buildTypes.debug.signingConfig = android.signingConfigs.debug
+    android.buildTypes.release.signingConfig = null
 }
