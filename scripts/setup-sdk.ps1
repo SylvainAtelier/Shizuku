@@ -85,14 +85,20 @@ $cmakeMin = [regex]::Match($managerGradle, 'version\s*=\s*"(\d+\.\d+)[^"]*"').Gr
 # cmake 取同一 major.minor 下最新的一个：CMakeLists 写的是 cmake_minimum_required(3.31)，
 # 跨到 4.x 会改变策略默认值，不冒这个险。
 $cmake = & $sdkmanager --list 2>$null |
-    ForEach-Object { if ($_ -match "^\s*cmake;($([regex]::Escape($cmakeMin))\.\d+)\s") { $Matches[1] } } |
+    ForEach-Object { # 旧版 sdkmanager 输出 cmake;x.y.z，转发到 Android CLI 的新版输出 cmake/x.y.z。
+        if ($_ -match "^\s*cmake[;/]($([regex]::Escape($cmakeMin))\.\d+)\s") { $Matches[1] } } |
     Sort-Object { [version]$_ } -Unique | Select-Object -Last 1
 if (-not $cmake) { throw "sdkmanager 里找不到 cmake $cmakeMin.x。" }
 
-$packages = @("ndk;$ndk", "cmake;$cmake", "build-tools;$buildTools", "platforms;android-$compileSdk", 'platform-tools')
+# 包名用 / 而不是 ;：sdkmanager.bat 经 cmd 转发参数时会在 ; 处把 "ndk;29.x" 拆成两个，
+# 而且拆坏了也返回 0。新版（转发到 Android CLI）两种写法都认。
+$packages = @("ndk/$ndk", "cmake/$cmake", "build-tools/$buildTools", "platforms/android-$compileSdk", 'platform-tools')
 Write-Output "安装/确认：$($packages -join ', ')"
 & $sdkmanager --install @packages
-if ($LASTEXITCODE -ne 0) { throw 'sdkmanager --install 失败。没接受许可的话加 -AcceptLicenses 重跑。' }
+
+# 退出码不可信，按目录确认真的装上了。
+$missing = $packages | Where-Object { -not (Test-Path (Join-Path $Sdk $_)) }
+if ($missing) { throw "以下组件没有装上：$($missing -join ', ')。旧版 sdkmanager 需加 -AcceptLicenses 重跑。" }
 
 Write-Output ''
 Write-Output "SDK 就绪：$Sdk"
