@@ -53,6 +53,7 @@ import rikka.parcelablelist.ParcelableListSlice;
 import rikka.rish.RishConfig;
 import rikka.shizuku.ShizukuApiConstants;
 import rikka.shizuku.server.api.IContentProviderUtils;
+import rikka.shizuku.server.api.PackageManagerCompat;
 import rikka.shizuku.server.util.HandlerUtil;
 import rikka.shizuku.server.util.UserHandleCompat;
 
@@ -215,6 +216,18 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
             if (clientRecord == null) {
                 LOGGER.w("Add client failed");
                 return;
+            }
+
+            // The config may lack an entry for a uid whose runtime permission is granted (e.g. the
+            // startup sync could not list installed packages). Use the same fallback as
+            // getFlagsForUid, so the client agrees with what the manager shows.
+            if (!isManager && !clientRecord.allowed && configManager.find(callingUid) == null
+                    && (getFlagsForUidInternal(callingUid, ConfigManager.MASK_PERMISSION, true) & ConfigManager.FLAG_ALLOWED) != 0) {
+                LOGGER.i("attachApplication: uid %d has runtime permission granted, allow it", callingUid);
+                clientRecord.allowed = true;
+                List<String> grantedPackages = new ArrayList<>();
+                grantedPackages.add(requestPackageName);
+                configManager.update(callingUid, grantedPackages, ConfigManager.MASK_PERMISSION, ConfigManager.FLAG_ALLOWED);
             }
         }
 
@@ -428,7 +441,7 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
         }
 
         for (int user : users) {
-            for (PackageInfo pi : PackageManagerApis.getInstalledPackagesNoThrow(PackageManager.GET_META_DATA | PackageManager.GET_PERMISSIONS, user)) {
+            for (PackageInfo pi : PackageManagerCompat.getInstalledPackagesNoThrow(PackageManager.GET_META_DATA | PackageManager.GET_PERMISSIONS, user)) {
                 if (Objects.equals(MANAGER_APPLICATION_ID, pi.packageName)) continue;
                 if (pi.applicationInfo == null) continue;
 
@@ -477,7 +490,7 @@ public class ShizukuService extends Service<ShizukuUserServiceManager, ShizukuCl
 
     private static void sendBinderToClient(Binder binder, int userId) {
         try {
-            for (PackageInfo pi : PackageManagerApis.getInstalledPackagesNoThrow(PackageManager.GET_PERMISSIONS, userId)) {
+            for (PackageInfo pi : PackageManagerCompat.getInstalledPackagesNoThrow(PackageManager.GET_PERMISSIONS, userId)) {
                 if (pi == null || pi.requestedPermissions == null)
                     continue;
 
