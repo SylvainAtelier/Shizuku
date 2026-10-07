@@ -135,11 +135,17 @@ function Assert-ReleaseSignature([string]$ApkPath) {
     $certs = & $apksigner verify --print-certs $ApkPath 2>&1 | ForEach-Object { $_.ToString() }
     if ($LASTEXITCODE -ne 0) { throw "APK 未签名或签名无效：$($certs -join ' ')" }
     $apkSha = [regex]::Match(($certs -join "`n"), 'certificate SHA-256 digest: ([0-9a-f]+)').Groups[1].Value
-    $expected = Get-KeystoreSha256
-    if ($apkSha -ne $expected) {
-        throw "APK 证书 $apkSha 与 .local/signing 的 keystore $expected 不一致，拒绝安装。"
+    # 三方比对：APK、本地 keystore、仓库里固定的指纹（release.yml 用同一个文件校验 CI 产物）。
+    # 三者一致才说明本地装的包与 GitHub Release 上的包是同一把密钥签的，可以互相覆盖升级。
+    $pinned = (Get-Content (Join-Path $root '.github/signing-cert.sha256') -Raw).Trim().ToLower()
+    $keystoreSha = Get-KeystoreSha256
+    if ($keystoreSha -ne $pinned) {
+        throw ".local/signing 的 keystore $keystoreSha 与 GitHub Release 使用的 $pinned 不是同一把密钥。"
     }
-    Write-Output "签名校验通过：$apkSha"
+    if ($apkSha -ne $pinned) {
+        throw "APK 证书 $apkSha 与 GitHub Release 使用的 $pinned 不一致，拒绝安装。"
+    }
+    Write-Output "签名校验通过（与 GitHub Release 相同）：$apkSha"
 }
 
 $root = Split-Path -Parent $PSScriptRoot

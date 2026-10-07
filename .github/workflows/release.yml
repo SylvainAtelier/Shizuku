@@ -209,7 +209,16 @@ jobs:
             exit 1
           fi
           echo "Using $APKSIGNER"
-          "$APKSIGNER" verify --print-certs "$APK"
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK")
+          echo "$CERTS"
+          # 与仓库里固定的证书指纹比对：本地 deploy-release.ps1 校验的是同一个文件，
+          # 两边一致才说明 Secret 里的密钥就是本地那一把。
+          ACTUAL=$(printf '%s\n' "$CERTS" | sed -n 's/.*certificate SHA-256 digest: //p' | sed -n '1p')
+          EXPECTED=$(tr -d '[:space:]' < .github/signing-cert.sha256)
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::APK 证书 $ACTUAL 与 .github/signing-cert.sha256 的 $EXPECTED 不一致，ANDROID_KEYSTORE_BASE64 不是预期的密钥。"
+            exit 1
+          fi
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
 
       - name: Upload APK and mapping to release
