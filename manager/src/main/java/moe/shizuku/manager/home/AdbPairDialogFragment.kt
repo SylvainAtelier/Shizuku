@@ -27,6 +27,7 @@ import moe.shizuku.manager.R
 import moe.shizuku.manager.ShizukuSettings
 import moe.shizuku.manager.adb.*
 import moe.shizuku.manager.databinding.AdbPairDialogBinding
+import moe.shizuku.manager.utils.EnvironmentUtils
 import rikka.lifecycle.viewModels
 import java.net.ConnectException
 
@@ -114,8 +115,7 @@ class AdbPairDialogFragment : DialogFragment() {
         super.onActivityCreated(savedInstanceState)
 
         val context = requireContext()
-        val inMultiScreenOrDisplay = (requireActivity().isInMultiWindowMode
-                || (requireActivity().window?.decorView?.display?.displayId ?: -1) > 0)
+        val inMultiScreenOrDisplay = EnvironmentUtils.canPairInApp(requireActivity())
 
         binding.text1.isVisible = inMultiScreenOrDisplay
         binding.text2.isVisible = !inMultiScreenOrDisplay
