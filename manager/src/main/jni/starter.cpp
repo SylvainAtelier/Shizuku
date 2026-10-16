@@ -7,6 +7,8 @@
 #include <cstring>
 #include <libgen.h>
 #include <sys/stat.h>
+#include <sys/file.h>
+#include <sys/wait.h>
 #include <sys/system_properties.h>
 #include <cerrno>
 #include <string>
@@ -34,6 +36,8 @@
 #define PACKAGE_NAME "moe.shizuku.privileged.api"
 #define SERVER_NAME "shizuku_server"
 #define SERVER_CLASS_PATH "rikka.shizuku.server.ShizukuService"
+#define STARTER_LOCK_PATH "/data/local/tmp/shizuku_starter.lock"
+#define SERVER_NAME_WAIT_MS 10000
 
 #if defined(__arm__)
 #define ABI "arm"
@@ -134,6 +138,20 @@ static void start_server(const char *path, const char *main_class, const char *p
             run_server(path, main_class, process_name);
         }
         default: {
+            // Hold the starter lock until the child has renamed itself to SERVER_NAME,
+            // so a concurrent starter's "kill old server" step can see (and kill) it.
+            // Otherwise two starters racing each other both leave a server running.
+            char name[1024];
+            for (int waited = 0; waited < SERVER_NAME_WAIT_MS; waited += 50) {
+                if (waitpid(pid, nullptr, WNOHANG) == pid) {
+                    printf("warn: shizuku_server %d exited during startup\n", pid);
+                    break;
+                }
+                if (get_proc_name(pid, name, sizeof(name)) == 0 && strcmp(SERVER_NAME, name) == 0) {
+                    break;
+                }
+                usleep(50 * 1000);
+            }
             printf("info: shizuku_server pid is %d\n", pid);
             printf("info: shizuku_starter exit with 0\n");
             exit(EXIT_SUCCESS);
@@ -225,6 +243,20 @@ int main(int argc, char *argv[]) {
 
     printf("info: starter begin\n");
     fflush(stdout);
+
+    // Serialize starters (e.g. boot / wireless adb auto start racing a manual start).
+    // O_CLOEXEC keeps the lock out of the server process; it is released when the starter exits.
+    int lock_fd = open(STARTER_LOCK_PATH, O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+    if (lock_fd != -1) {
+        fchmod(lock_fd, 0666);
+        printf("info: waiting for other starters...\n");
+        fflush(stdout);
+        if (flock(lock_fd, LOCK_EX) != 0) {
+            printf("warn: can't lock %s (%d)\n", STARTER_LOCK_PATH, errno);
+        }
+    } else {
+        printf("warn: can't open %s (%d)\n", STARTER_LOCK_PATH, errno);
+    }
 
     // kill old server
     printf("info: killing old process...\n");
