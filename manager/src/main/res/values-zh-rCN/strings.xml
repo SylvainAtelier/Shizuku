@@ -128,4 +128,7 @@
     <string name="home_app_management_empty">已请求或声明 Shizuku 的应用程序将显示在此处。</string>
     <string name="home_adb_is_limited_title">您需要进行额外的步骤</string>
     <string name="home_adb_is_limited_description">您的设备制造商限制了 adb 的权限，使用 Shizuku 的应用无法正常工作。\n\n通常，在“开发者选项”中调整一些选项即可解除此限制。请阅读帮助来了解具体的操作方式。\n\n您可能需要重新启动 Shizuku 以使操作生效。</string>
+    <string name="adb_pairing_in_app_searching_summary">在“无线调试”中点按“使用配对码配对设备”。配对码可以在此处或通知中输入。</string>
+    <string name="adb_pairing_in_app_found_summary">输入系统对话框中显示的六位数字配对码。</string>
+    <string name="adb_pairing_in_app_search_again">重新搜索</string>
 </resources>

@@ -8,6 +8,8 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.Observer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -35,6 +37,15 @@ class AdbPairingService : Service() {
         private const val replyAction = "reply"
         private const val remoteInputResultKey = "paring_code"
         private const val portKey = "paring_code"
+        private const val codeKey = "code"
+
+        private val _state = MutableLiveData<State>(State.Idle)
+
+        /**
+         * Pairing progress shared with in-app UI, so the pairing code can be entered
+         * either from the notification or from [AdbPairingTutorialActivity].
+         */
+        val state: LiveData<State> = _state
 
         fun startIntent(context: Context): Intent {
             return Intent(context, AdbPairingService::class.java).setAction(startAction)
@@ -47,13 +58,33 @@ class AdbPairingService : Service() {
         private fun replyIntent(context: Context, port: Int): Intent {
             return Intent(context, AdbPairingService::class.java).setAction(replyAction).putExtra(portKey, port)
         }
+
+        fun inputIntent(context: Context, port: Int, code: String): Intent {
+            return replyIntent(context, port).putExtra(codeKey, code)
+        }
     }
 
+    sealed class State {
+        object Idle : State()
+        object Searching : State()
+        data class Found(val port: Int) : State()
+        data class Working(val port: Int) : State()
+        object Succeeded : State()
+        data class Failed(val port: Int, val reason: FailureReason, val message: String?) : State()
+    }
+
+    enum class FailureReason { CONNECT, WRONG_CODE, KEY_STORE, OTHER }
+
     private var adbMdns: AdbMdns? = null
+
+    private var foundPort = -1
 
     private val observer = Observer<Int> { port ->
         Log.i(tag, "Pairing service port: $port")
         if (port <= 0) return@Observer
+
+        foundPort = port
+        _state.postValue(State.Found(port))
 
         // Since the service could be killed before user finishing input,
         // we need to put the port into Intent
@@ -85,7 +116,8 @@ class AdbPairingService : Service() {
                 onStart()
             }
             replyAction -> {
-                val code = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(remoteInputResultKey) ?: ""
+                val code = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(remoteInputResultKey)
+                    ?: intent.getStringExtra(codeKey) ?: ""
                 val port = intent.getIntExtra(portKey, -1)
                 if (port != -1) {
                     onInput(code.toString(), port)
@@ -96,6 +128,7 @@ class AdbPairingService : Service() {
             stopAction -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+                _state.postValue(State.Idle)
                 null
             }
             else -> {
@@ -127,6 +160,7 @@ class AdbPairingService : Service() {
     private fun stopSearch() {
         if (!started) return
         started = false
+        foundPort = -1
         adbMdns?.stop()
     }
 
@@ -136,11 +170,19 @@ class AdbPairingService : Service() {
     }
 
     private fun onStart(): Notification {
+        // Keep the found port if searching is already running (e.g. activity recreated)
+        if (started && foundPort > 0) {
+            _state.postValue(State.Found(foundPort))
+            return createInputNotification(foundPort)
+        }
         startSearch()
+        _state.postValue(State.Searching)
         return searchingNotification
     }
 
     private fun onInput(code: String, port: Int): Notification {
+        _state.postValue(State.Working(port))
+
         GlobalScope.launch(Dispatchers.IO) {
             val host = "127.0.0.1"
 
@@ -148,22 +190,23 @@ class AdbPairingService : Service() {
                 AdbKey(PreferenceAdbKeyStore(ShizukuSettings.getPreferences()), "shizuku")
             } catch (e: Throwable) {
                 e.printStackTrace()
+                handleResult(false, AdbKeyException(e), port)
                 return@launch
             }
 
             AdbPairingClient(host, port, code, key).runCatching {
                 start()
             }.onFailure {
-                handleResult(false, it)
+                handleResult(false, it, port)
             }.onSuccess {
-                handleResult(it, null)
+                handleResult(it, null, port)
             }
         }
 
         return workingNotification
     }
 
-    private fun handleResult(success: Boolean, exception: Throwable?) {
+    private fun handleResult(success: Boolean, exception: Throwable?, port: Int) {
         stopForeground(STOP_FOREGROUND_REMOVE)
 
         val title: String
@@ -176,6 +219,7 @@ class AdbPairingService : Service() {
             text = getString(R.string.notification_adb_pairing_succeed_text)
 
             stopSearch()
+            _state.postValue(State.Succeeded)
         } else {
             title = getString(R.string.notification_adb_pairing_failed_title)
 
@@ -199,6 +243,16 @@ class AdbPairingService : Service() {
             } else {
                 Log.w(tag, "Pair failed")
             }
+
+            val reason = when (exception) {
+                is ConnectException -> FailureReason.CONNECT
+                is AdbInvalidPairingCodeException -> FailureReason.WRONG_CODE
+                is AdbKeyException -> FailureReason.KEY_STORE
+                else -> FailureReason.OTHER
+            }
+            // Stack trace is fine for the notification, but too noisy for in-app UI
+            val message = if (reason == FailureReason.OTHER) exception?.message else text
+            _state.postValue(State.Failed(port, reason, message))
         }
 
         getSystemService(NotificationManager::class.java).notify(
